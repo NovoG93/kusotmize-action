@@ -20,6 +20,7 @@ jobs:
           working-directory: "tests/integration"
           build-all: "false"
           output-dir: "kustomize-builds"
+          changed-only: "false"
 
       - name: Verify Output
         run: |

@@ -8,7 +8,7 @@ RUN go mod download && \
 # --- runtime stage ---
 FROM debian:bookworm-slim
 # hadolint ignore=DL3008
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tar && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tar git && rm -rf /var/lib/apt/lists/*
 
 # kustomize is downloaded at runtime by the action according to env KUSTOMIZE_VERSION
 COPY --from=builder /out/action /usr/local/bin/action
