@@ -1,0 +1,2 @@
+fixes:
+  - "github.com/novog93/kustomize-action/::src/"
