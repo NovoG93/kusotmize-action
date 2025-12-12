@@ -1,0 +1,65 @@
+name: "Kustomize Build (Go)"
+description: "Find root kustomizations, build them with kustomize, and stage rendered manifests for upload."
+author: "Georg Novotny"
+branding:
+  icon: cloud-drizzle
+  color: blue
+
+inputs:
+  output-dir:
+    description: "Directory to place rendered manifests"
+    required: false
+    default: "kustomize-builds"
+  kustomize-version:
+    description: "kustomize version to install (e.g., v5.6.0)"
+    required: false
+    default: "v5.6.0"
+  kustomize-sha256:
+    description: "Optional SHA256 for the kustomize tarball (hex, with or without 'sha256:' prefix)"
+    required: false
+    default: ""
+  enable-helm:
+    description: "Pass --enable-helm to kustomize build"
+    required: false
+    default: "true"
+  load-restrictor:
+    description: "Value for --load-restrictor (e.g., LoadRestrictionsNone)"
+    required: false
+    default: "LoadRestrictionsNone"
+  working-directory:
+    description: "Relative path to scan (default repo root)"
+    required: false
+    default: "."
+  build-all:
+    description: "Build all kustomization files (default: false)"
+    required: false
+    default: "false"
+  fail-on-error:
+    description: "Fail the build if any kustomization fails to build"
+    required: false
+    default: "false"
+  fail-fast:
+    description: "Fail the build fast if any kustomization fails to build"
+    required: false
+    default: "false"
+  changed-only:
+    description: "Build only kustomization roots affected by changes in the last commit (default: true)"
+    required: false
+    default: "true"
+
+outputs:
+  artifact-name:
+    description: "Suggested artifact name for upload"
+  manifest-count:
+    description: "Number of rendered manifest files (*.yaml)"
+  success-count:
+    description: "Number of successful builds"
+  fail-count:
+    description: "Number of failed builds"
+  roots-json:
+    description: "JSON array of discovered root kustomization folders"
+
+runs:
+  using: "docker"
+  image: "Dockerfile"
+
