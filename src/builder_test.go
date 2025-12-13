@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -293,5 +295,20 @@ func TestBuildKustomizations_FailFastCancelsOthers_NoOutputsForCanceled(t *testi
 	wantErr := sanitizeOutName(failDir) + "_kustomization-err.yaml"
 	if entries[0].Name() != wantErr {
 		t.Fatalf("Expected error file %q, got %q", wantErr, entries[0].Name())
+	}
+}
+
+func TestDefaultRunCommand(t *testing.T) {
+	ctx := context.Background()
+	var stdout, stderr bytes.Buffer
+
+	// Use "echo" as a command that should exist
+	err := defaultRunCommand(ctx, "echo", []string{"hello"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("defaultRunCommand failed: %v", err)
+	}
+
+	if strings.TrimSpace(stdout.String()) != "hello" {
+		t.Errorf("expected 'hello', got '%s'", stdout.String())
 	}
 }

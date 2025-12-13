@@ -11,16 +11,39 @@ import (
 	"strings"
 )
 
+// KustomizeBuilder defines the function signature for building kustomizations
+type KustomizeBuilder func(roots []string, conf Config, kustomizePath string) Summary
+
 func main() {
 	// Log to stdout in a friendly way for Actions
 	log.SetFlags(0)
 
 	config := LoadConfig()
+	installer := NewKustomizeInstaller()
 
+	if err := Run(config, installer, BuildKustomizations); err != nil {
+		fail("%v", err)
+	}
+}
+
+func Run(config Config, installer *KustomizeInstaller, builder KustomizeBuilder) error {
 	// Ensure kustomize present (download per version)
-	kustomizePath, err := ensureKustomize(config.KustomizeVersion, config.KustomizeSHA256)
+	kustomizePath, err := installer.Install(config.KustomizeVersion, config.KustomizeSHA256)
 	if err != nil {
-		fail("failed to install kustomize: %v", err)
+		return fmt.Errorf("failed to install kustomize: %v", err)
+	}
+
+	// Log tool versions
+	if out, err := installer.Cmd.Run(kustomizePath, "version"); err == nil {
+		log.Printf("ℹ️ Using kustomize version: %s", strings.TrimSpace(string(out)))
+	} else {
+		log.Printf("⚠️ Failed to get kustomize version: %v", err)
+	}
+
+	if out, err := installer.Cmd.Run("helm", "version", "--short"); err == nil {
+		log.Printf("ℹ️ Using helm version: %s", strings.TrimSpace(string(out)))
+	} else {
+		log.Printf("ℹ️ Helm version check failed (helm might not be installed): %v", err)
 	}
 
 	var roots []string
@@ -32,14 +55,14 @@ func main() {
 		log.Println("🔍 Scanning for all kustomization files in the working directory...")
 		files, err := findKustomizationFilesWithExclusions(config.WorkingDir, excludedScanDirs)
 		if err != nil {
-			fail("scan error: %v", err)
+			return fmt.Errorf("scan error: %v", err)
 		}
 		roots = kustomizationDirsFromFiles(files, config.WorkingDir)
 	} else {
 		log.Println("🔍 Scanning for root kustomization files in the working directory...")
 		files, err := findKustomizationFilesWithExclusions(config.WorkingDir, excludedScanDirs)
 		if err != nil {
-			fail("scan error: %v", err)
+			return fmt.Errorf("scan error: %v", err)
 		}
 		roots = kustomizationDirsFromFiles(files, config.WorkingDir)
 		log.Printf("📂 Found %d candidate kustomizations (before dedupe).", len(roots))
@@ -51,7 +74,7 @@ func main() {
 
 	// Create output dir
 	if err := os.MkdirAll(config.OutputDir, 0o755); err != nil {
-		fail("cannot create output dir: %v", err)
+		return fmt.Errorf("cannot create output dir: %v", err)
 	}
 
 	// Build all roots in parallel
@@ -60,13 +83,13 @@ func main() {
 		log.Println("🧮 changed-only=true: determining changed files for last commit...")
 		changed, err := getChangedFilesLastCommit(config.WorkingDir)
 		if err != nil {
-			fail("changed-only mode failed: %v", err)
+			return fmt.Errorf("changed-only mode failed: %v", err)
 		}
 		filtered := selectRootsForChangedFiles(repoRoots, changed)
 		log.Printf("🧮 changed-only: %d roots selected from %d discovered.", len(filtered), len(repoRoots))
 		repoRoots = filtered
 	}
-	summary := BuildKustomizations(repoRoots, config, kustomizePath)
+	summary := builder(repoRoots, config, kustomizePath)
 
 	// Write summary
 	sumBytes, _ := json.MarshalIndent(summary, "", "  ")
@@ -88,9 +111,10 @@ func main() {
 	setOutput("roots-json", string(rootsJSON))
 
 	if summary.Failed > 0 && config.FailOnError {
-		fail("kustomize build failed for %d roots", summary.Failed)
+		return fmt.Errorf("kustomize build failed for %d roots", summary.Failed)
 	}
 	// Exit code: if any failed builds, still exit 0 (let the consumer decide),
+	return nil
 }
 
 func setOutput(name, value string) {

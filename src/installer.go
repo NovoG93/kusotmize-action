@@ -15,16 +15,99 @@ import (
 	"time"
 )
 
-func ensureKustomize(version string, expectedSHA256 string) (string, error) {
+// CommandRunner defines the interface for running commands and looking up paths.
+type CommandRunner interface {
+	LookPath(file string) (string, error)
+	Run(name string, args ...string) ([]byte, error)
+}
+
+// Downloader defines the interface for downloading files.
+type Downloader interface {
+	Download(url string, dest string) error
+}
+
+// FileSystem defines the interface for file system operations.
+type FileSystem interface {
+	Chmod(name string, mode os.FileMode) error
+}
+
+// RealCommandRunner implements CommandRunner using os/exec.
+type RealCommandRunner struct{}
+
+func (r *RealCommandRunner) LookPath(file string) (string, error) {
+	return exec.LookPath(file)
+}
+
+func (r *RealCommandRunner) Run(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	return cmd.CombinedOutput()
+}
+
+// RealDownloader implements Downloader using net/http.
+type RealDownloader struct{}
+
+func (r *RealDownloader) Download(url string, dest string) error {
+	client := &http.Client{Timeout: 90 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "kustomize-action")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("download failed: %s", resp.Status)
+	}
+
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RealFileSystem implements FileSystem using os package.
+type RealFileSystem struct{}
+
+func (r *RealFileSystem) Chmod(name string, mode os.FileMode) error {
+	return os.Chmod(name, mode)
+}
+
+// KustomizeInstaller handles the installation of kustomize.
+type KustomizeInstaller struct {
+	Cmd        CommandRunner
+	Downloader Downloader
+	FS         FileSystem
+}
+
+// NewKustomizeInstaller creates a new installer with real dependencies.
+func NewKustomizeInstaller() *KustomizeInstaller {
+	return &KustomizeInstaller{
+		Cmd:        &RealCommandRunner{},
+		Downloader: &RealDownloader{},
+		FS:         &RealFileSystem{},
+	}
+}
+
+// Install installs kustomize if not present or version mismatch.
+func (ki *KustomizeInstaller) Install(version string, expectedSHA256 string) (string, error) {
 	version = strings.TrimSpace(version)
 	if version == "" {
 		return "", fmt.Errorf("kustomize version is empty")
 	}
 
 	// If kustomize is already present and matches, keep it.
-	if path, err := exec.LookPath("kustomize"); err == nil {
-		cmd := exec.Command(path, "version", "--short")
-		out, err := cmd.CombinedOutput()
+	if path, err := ki.Cmd.LookPath("kustomize"); err == nil {
+		out, err := ki.Cmd.Run(path, "version", "--short")
 		if err == nil && strings.Contains(string(out), version) {
 			return path, nil
 		}
@@ -43,31 +126,7 @@ func ensureKustomize(version string, expectedSHA256 string) (string, error) {
 	_ = tmp.Close()
 	defer os.Remove(tmpPath)
 
-	client := &http.Client{Timeout: 90 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "kustomize-action")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", fmt.Errorf("download failed: %s", resp.Status)
-	}
-
-	out, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		_ = out.Close()
-		return "", err
-	}
-	if err := out.Close(); err != nil {
+	if err := ki.Downloader.Download(url, tmpPath); err != nil {
 		return "", err
 	}
 
@@ -75,13 +134,10 @@ func ensureKustomize(version string, expectedSHA256 string) (string, error) {
 		return "", err
 	}
 
-	// Extract the tarball into /usr/local/bin using tar (simpler than re-implementing tar parsing).
-	// The archive includes a single 'kustomize' binary.
+	// Extract the tarball into /usr/local/bin using tar
 	installDir := "/usr/local/bin"
-	cmd := exec.Command("tar", "-xzf", tmpPath, "-C", installDir)
-	if _, err := cmd.CombinedOutput(); err != nil {
+	if _, err := ki.Cmd.Run("tar", "-xzf", tmpPath, "-C", installDir); err != nil {
 		// If extraction to /usr/local/bin failed, try a temporary directory.
-		// This is common when running locally without root.
 		log.Printf("⚠️ Could not install kustomize to %s (likely permission denied). Falling back to temp dir.", installDir)
 
 		tmpBin, err := os.MkdirTemp("", "kustomize-bin-*")
@@ -90,12 +146,11 @@ func ensureKustomize(version string, expectedSHA256 string) (string, error) {
 		}
 		installDir = tmpBin
 
-		cmd = exec.Command("tar", "-xzf", tmpPath, "-C", installDir)
-		if output, err := cmd.CombinedOutput(); err != nil {
+		if output, err := ki.Cmd.Run("tar", "-xzf", tmpPath, "-C", installDir); err != nil {
 			return "", fmt.Errorf("extract failed: %w: %s", err, strings.TrimSpace(string(output)))
 		}
 
-		// Update PATH for the current process so exec.Command("kustomize") works
+		// Update PATH for the current process
 		path := os.Getenv("PATH")
 		newPath := installDir + string(os.PathListSeparator) + path
 		if err := os.Setenv("PATH", newPath); err != nil {
@@ -105,10 +160,15 @@ func ensureKustomize(version string, expectedSHA256 string) (string, error) {
 	}
 
 	bin := filepath.Join(installDir, "kustomize")
-	if err := os.Chmod(bin, 0o755); err != nil {
+	if err := ki.FS.Chmod(bin, 0o755); err != nil {
 		return "", err
 	}
 	return bin, nil
+}
+
+// InstallKustomize is a helper for backward compatibility.
+func InstallKustomize(version, expectedSHA256 string) (string, error) {
+	return NewKustomizeInstaller().Install(version, expectedSHA256)
 }
 
 func verifySHA256(path string, expected string) error {

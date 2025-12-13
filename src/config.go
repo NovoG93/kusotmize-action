@@ -21,7 +21,7 @@ type Config struct {
 func LoadConfig() Config {
 	return Config{
 		OutputDir:        getInput("output-dir", "kustomize-builds"),
-		KustomizeVersion: getInput("kustomize-version", "v5.6.0"),
+		KustomizeVersion: getInput("kustomize-version", "v5.8.0"),
 		KustomizeSHA256:  getInput("kustomize-sha256", ""),
 		EnableHelm:       strings.ToLower(getInput("enable-helm", "true")) == "true",
 		LoadRestrictor:   getInput("load-restrictor", "LoadRestrictionsNone"),
